@@ -20,10 +20,13 @@ import { SessionActionsMenu, SessionContextMenu } from './session-actions-menu'
 
 interface SidebarSessionRowProps extends React.ComponentProps<'div'> {
   session: SessionInfo
+  /** TUI-style tree stem for branched sessions (`└─ ` / `├─ `). */
+  branchStem?: string
   isPinned: boolean
   isSelected: boolean
   isWorking: boolean
   onArchive: () => void
+  onBranch?: () => void
   onDelete: () => void
   onPin: () => void
   onResume: () => void
@@ -52,10 +55,12 @@ function formatAge(seconds: number, r: Translations['sidebar']['row']): string {
 
 export function SidebarSessionRow({
   session,
+  branchStem,
   isPinned,
   isSelected,
   isWorking,
   onArchive,
+  onBranch,
   onDelete,
   onPin,
   onResume,
@@ -85,6 +90,7 @@ export function SidebarSessionRow({
   return (
     <SessionContextMenu
       onArchive={onArchive}
+      onBranch={onBranch}
       onDelete={onDelete}
       onPin={onPin}
       pinned={isPinned}
@@ -102,6 +108,7 @@ export function SidebarSessionRow({
             )}
             <SessionActionsMenu
               onArchive={onArchive}
+              onBranch={onBranch}
               onDelete={onDelete}
               onPin={onPin}
               pinned={isPinned}
@@ -152,7 +159,7 @@ export function SidebarSessionRow({
         {...rest}
       >
         {isWorking && !needsInput && <span aria-hidden="true" className="arc-border" />}
-        <SidebarRowBody className="z-0 group-hover:pr-12" onClick={event => {
+        <SidebarRowBody className={cn('z-0 group-hover:pr-12', branchStem && 'pl-3.5')} onClick={event => {
             if (event.shiftKey) {
               event.preventDefault()
               event.stopPropagation()
@@ -185,7 +192,8 @@ export function SidebarSessionRow({
               dragHandleProps={dragHandleProps}
               leadClassName={needsInput ? 'overflow-visible' : undefined}
             >
-              <SidebarRowDot
+              <SessionRowLeadDot
+                branchStem={branchStem}
                 className="transition-opacity group-hover/handle:opacity-0 group-focus-within/handle:opacity-0"
                 isWorking={isWorking}
                 needsInput={needsInput}
@@ -193,7 +201,7 @@ export function SidebarSessionRow({
             </SidebarRowGrab>
           ) : (
             <SidebarRowLead className={needsInput ? 'overflow-visible' : 'overflow-hidden'}>
-              <SidebarRowDot isWorking={isWorking} needsInput={needsInput} />
+              <SessionRowLeadDot branchStem={branchStem} isWorking={isWorking} needsInput={needsInput} />
             </SidebarRowLead>
           )}
           {handoffSource && handoffLabel ? (
@@ -211,6 +219,29 @@ export function SidebarSessionRow({
         </SidebarRowBody>
       </SidebarRowShell>
     </SessionContextMenu>
+  )
+}
+
+function SessionRowLeadDot({
+  branchStem,
+  isWorking,
+  needsInput = false,
+  className
+}: {
+  branchStem?: string
+  isWorking: boolean
+  needsInput?: boolean
+  className?: string
+}) {
+  return (
+    <span className={cn('flex items-center gap-0.5', className)}>
+      {branchStem ? (
+        <span aria-hidden className="shrink-0 font-mono text-[0.625rem] leading-none text-(--ui-text-quaternary)">
+          {branchStem}
+        </span>
+      ) : null}
+      <SidebarRowDot isWorking={isWorking} needsInput={needsInput} />
+    </span>
   )
 }
 

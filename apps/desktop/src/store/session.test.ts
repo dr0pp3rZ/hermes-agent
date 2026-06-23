@@ -201,16 +201,14 @@ describe('workspaceCwdForNewSession', () => {
     expect(workspaceCwdForNewSession()).toBe('/home/user/configured')
   })
 
-  it('falls back to the remembered workspace when no configured default is set', () => {
+  it('starts detached (no inherited cwd) when no default project dir is configured', () => {
+    // A bare new chat must NOT inherit the sticky/remembered or live workspace —
+    // that's the "why is my new session already on a branch" bug. Only an
+    // explicit configured default pre-attaches.
     window.localStorage.setItem('hermes.desktop.workspace-cwd', '/home/user/sticky')
-
-    expect(workspaceCwdForNewSession()).toBe('/home/user/sticky')
-  })
-
-  it('falls back to the live cwd when neither configured nor remembered values exist', () => {
     $currentCwd.set('/home/user/live')
 
-    expect(workspaceCwdForNewSession()).toBe('/home/user/live')
+    expect(workspaceCwdForNewSession()).toBe('')
   })
 
   it('does not rewrite the live cwd while a session is active', () => {
@@ -238,8 +236,10 @@ describe('workspaceCwdForNewSession', () => {
     setCurrentCwd('/backend/project-b')
     expect(workspaceCwdForNewSession()).toBe('/backend/project-b')
 
+    // Back on local with no configured default: a bare new chat is detached and
+    // never reads the remote keys (nor inherits the sticky local workspace).
     $connection.set(null)
-    expect(workspaceCwdForNewSession()).toBe('/local/project')
+    expect(workspaceCwdForNewSession()).toBe('')
   })
 })
 

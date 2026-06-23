@@ -1,10 +1,10 @@
 import { atom } from 'nanostores'
 
 import { liveSessionProjectId, type SidebarProjectTree } from '@/app/chat/sidebar/projects/workspace-groups'
-import { persistString, storedString } from '@/lib/storage'
+import { persistentAtom } from '@/lib/persisted'
 import { activeGateway, ensureActiveGatewayOpen } from '@/store/gateway'
 import { requestFreshSession } from '@/store/profile'
-import { $selectedStoredSessionId, $sessions } from '@/store/session'
+import { $selectedStoredSessionId, $sessions, workspaceCwdForNewSession } from '@/store/session'
 import type { ProjectInfo, ProjectsPayload } from '@/types/hermes'
 
 // First-class, per-profile Projects (named, multi-folder workspaces). State is
@@ -82,9 +82,10 @@ export const ALL_PROJECTS = '__all_projects__'
 
 const PROJECT_SCOPE_KEY = 'hermes.desktop.projectScope'
 
-export const $projectScope = atom<string>(storedString(PROJECT_SCOPE_KEY) || ALL_PROJECTS)
-
-$projectScope.subscribe(value => persistString(PROJECT_SCOPE_KEY, value || ALL_PROJECTS))
+export const $projectScope = persistentAtom<string>(PROJECT_SCOPE_KEY, ALL_PROJECTS, {
+  decode: raw => raw || ALL_PROJECTS,
+  encode: value => value || ALL_PROJECTS
+})
 
 // Enter a project: scope the sidebar to it and make it the active project
 // (best-effort — the durable pointer is nice-to-have, the view scope is the
@@ -102,6 +103,27 @@ export function enterProject(id: string): void {
 
 export function exitProjectScope(): void {
   $projectScope.set(ALL_PROJECTS)
+}
+
+// The cwd a NEW chat should start in. The "active project" is just an atom
+// ($projectScope) — so when you're inside a project, a new session (cmd-n, the
+// trunk "+") starts at that project's root (its primary repo = the default-branch
+// checkout) instead of inheriting whatever unrelated worktree the live cwd
+// drifted into. Outside a project it falls back to the plain default (detached),
+// so a bare new chat shows no branch.
+export function resolveNewSessionCwd(): string {
+  const scope = $projectScope.get()
+
+  if (scope !== ALL_PROJECTS) {
+    const project = $projectTree.get().find(node => node.id === scope)
+    const cwd = (project?.path || project?.repos.find(repo => repo.path)?.path || '').trim()
+
+    if (cwd) {
+      return cwd
+    }
+  }
+
+  return workspaceCwdForNewSession()
 }
 
 // Issue a request on whichever gateway is currently active, reconnecting once
@@ -147,6 +169,7 @@ interface ProjectTreePayload {
 // cached tree intact so the sidebar doesn't flicker.
 export async function refreshProjectTree(): Promise<void> {
   $projectTreeLoading.set(true)
+
   try {
     const res = await gatewayRequest<ProjectTreePayload>('projects.tree', { preview_limit: 3 })
     // The flat Sessions list shows everything; scoped ids are only used here to
@@ -499,7 +522,7 @@ export function refreshWorktrees(): void {
 // truth; the caller starts a session in the returned path.
 export async function startWorkInRepo(
   repoPath: string,
-  options?: { name?: string; branch?: string }
+  options?: { name?: string; branch?: string; base?: string }
 ): Promise<null | { path: string; branch: string }> {
   const git = window.hermesDesktop?.git
 
@@ -511,6 +534,44 @@ export async function startWorkInRepo(
   bumpWorktrees()
 
   return { branch: result.branch, path: result.path }
+}
+
+export async function switchBranchInRepo(repoPath: string, branch: string): Promise<void> {
+  const git = window.hermesDesktop?.git
+
+  if (!git || !repoPath || !branch.trim()) {
+    return
+  }
+
+  await git.branchSwitch(repoPath, branch)
+  bumpWorktrees()
+}
+
+// A composer-driven "branch off into a new worktree" hand-off. The composer
+// owns the typed draft; the chat controller owns session lifecycle. The composer
+// creates the worktree (startWorkInRepo), then fires this so the controller opens
+// a fresh session in that worktree and prefills the draft that kicked off the
+// task. A monotonic token lets a rapid second request re-fire the controller's
+// effect even if the path repeats.
+export interface StartWorkSessionRequest {
+  draft?: string
+  path: string
+  token: number
+}
+
+export const $startWorkSessionRequest = atom<StartWorkSessionRequest | null>(null)
+
+let startWorkToken = 0
+
+export function requestStartWorkSession(path: string, draft?: string): void {
+  const target = path.trim()
+
+  if (!target) {
+    return
+  }
+
+  startWorkToken += 1
+  $startWorkSessionRequest.set({ draft: draft?.trim() || undefined, path: target, token: startWorkToken })
 }
 
 export async function removeWorktreePath(

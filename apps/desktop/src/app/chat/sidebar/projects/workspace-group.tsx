@@ -5,6 +5,8 @@ import { Codicon } from '@/components/ui/codicon'
 import type { SessionInfo } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { newSessionInProfile } from '@/store/profile'
+import { switchBranchInRepo } from '@/store/projects'
+import { notifyError } from '@/store/notifications'
 
 import { countLabel, SidebarRowStack } from '../chrome'
 import { SidebarLoadMoreRow } from '../load-more-row'
@@ -56,6 +58,33 @@ export function SidebarWorkspaceGroup({ group, renderRows, onNewSession, onRemov
     }
   }
 
+  const handleNewSession = async () => {
+    if (isProfileGroup) {
+      newSessionInProfile(group.id)
+
+      return
+    }
+
+    if (!onNewSession) {
+      return
+    }
+
+    // Main-checkout lanes are branch-labeled views over the same repo root path.
+    // Clicking "+" on `main` should open on `main`, not whatever branch the root
+    // currently sits on (`test0`, etc.), so explicitly switch first.
+    if (group.isMain && group.path && group.label) {
+      try {
+        await switchBranchInRepo(group.path, group.label)
+      } catch (err) {
+        notifyError(err, t.statusStack.coding.switchFailed(group.label))
+
+        return
+      }
+    }
+
+    onNewSession(group.path)
+  }
+
   return (
     <SidebarRowStack>
       <WorkspaceHeader
@@ -66,9 +95,9 @@ export function SidebarWorkspaceGroup({ group, renderRows, onNewSession, onRemov
                 <WorkspaceAddButton
                   label={s.newSessionIn(group.label)}
                   // Profile groups start a fresh session in that profile but keep
-                  // the all-profiles browse view (newSessionInProfile leaves the
-                  // scope alone); workspace groups seed the new session's cwd.
-                  onClick={() => (isProfileGroup ? newSessionInProfile(group.id) : onNewSession?.(group.path))}
+                  // the all-profiles browse view; workspace groups seed the new
+                  // session's cwd. Main checkout lanes are branch-targeted.
+                  onClick={() => void handleNewSession()}
                 />
               )}
               {onRemove && <WorkspaceMenu onRemove={onRemove} path={group.path} />}

@@ -59,7 +59,11 @@ export interface SidebarProjectTree {
 }
 
 /** Path split into segments, ignoring trailing slashes and mixed separators. */
-const segments = (path: string): string[] => path.replace(/[/\\]+$/, '').split(/[/\\]/).filter(Boolean)
+const segments = (path: string): string[] =>
+  path
+    .replace(/[/\\]+$/, '')
+    .split(/[/\\]/)
+    .filter(Boolean)
 
 /** A path with trailing separators stripped, for stable equality checks. */
 const normalizePath = (path: null | string | undefined): string => (path ?? '').replace(/[/\\]+$/, '')
@@ -81,7 +85,8 @@ export function kanbanWorktreeDir(path: string): null | string {
 export const DEFAULT_BRANCH_LABEL = 'main'
 
 /** The one definition of a main-checkout lane id (must match the backend tree). */
-export const branchLaneId = (repoRoot: string, branch?: string): string => `${repoRoot}::branch::${(branch ?? '').trim()}`
+export const branchLaneId = (repoRoot: string, branch?: string): string =>
+  `${repoRoot}::branch::${(branch ?? '').trim()}`
 
 /** A session's recency stamp (last activity, falling back to creation). */
 export const sessionRecency = (session: SessionInfo): number => session.last_active || session.started_at || 0
@@ -131,7 +136,38 @@ export function mergeRepoWorktreeGroups(
   repo: Pick<SidebarWorkspaceTree, 'groups' | 'id' | 'path'>,
   discoveredWorktrees?: HermesGitWorktree[]
 ): SidebarSessionGroup[] {
-  const merged = [...repo.groups]
+  // Branch-primary labels: a linked worktree's identity in every git UI (VS
+  // Code, JetBrains, lazygit, …) is its CHECKED-OUT BRANCH, not the directory it
+  // happens to live in. The backend labels these lanes by dir/slug; relabel them
+  // to the live branch from `git worktree list` so the sidebar matches the
+  // composer's branch strip. Detached worktrees (no branch) keep their dir label.
+  const liveBranchByPath = new Map<string, string>()
+
+  for (const worktree of discoveredWorktrees ?? []) {
+    const wtPath = normalizePath(worktree.path)
+    const branch = worktree.branch?.trim()
+
+    if (wtPath && branch && !worktree.detached) {
+      liveBranchByPath.set(wtPath, branch)
+    }
+  }
+
+  // Never relabel the main checkout's existing branch lanes: the repo root can
+  // have historical/session lanes for `main` while the same physical checkout is
+  // currently switched to `test0`. Those lanes share a path but represent
+  // different branch contexts, so the live checkout is injected below as its own
+  // empty/current lane when needed.
+  const relabel = (group: SidebarSessionGroup): SidebarSessionGroup => {
+    if (group.isMain || group.isKanban) {
+      return group
+    }
+
+    const branch = liveBranchByPath.get(normalizePath(group.path))
+
+    return branch && branch !== group.label ? { ...group, label: branch } : group
+  }
+
+  const merged = repo.groups.map(relabel)
   const seenIds = new Set(merged.map(group => group.id))
   const seenPaths = new Set(merged.map(group => group.path).filter((path): path is string => Boolean(path)))
   // Dedupe by branch label too: a branch shows once even if it's checked out in
@@ -156,7 +192,10 @@ export function mergeRepoWorktreeGroups(
     const label = (worktree.isMain ? worktree.branch?.trim() || DEFAULT_BRANCH_LABEL : worktree.branch?.trim()) || baseName(wtPath) || wtPath
     const id = worktree.isMain ? branchLaneId(repo.id, label) : wtPath
 
-    if (seenIds.has(id) || seenPaths.has(wtPath) || seenLabels.has(label.toLowerCase())) {
+    const alreadySeen =
+      seenIds.has(id) || seenLabels.has(label.toLowerCase()) || (!worktree.isMain && seenPaths.has(wtPath))
+
+    if (alreadySeen) {
       continue
     }
 
@@ -344,8 +383,8 @@ export function overlayRepoLanes(
 
       lane =
         lanes.find(g => g.id === placed.id) ??
-        (placedPath ? lanes.find(g => normalizePath(g.path) === placedPath) : undefined) ??
-        (placed.isMain ? lanes.find(g => g.isMain && g.label.toLowerCase() === placed.label.toLowerCase()) : undefined)
+        (placed.isMain ? lanes.find(g => g.isMain && g.label.toLowerCase() === placed.label.toLowerCase()) : undefined) ??
+        (!placed.isMain && placedPath ? lanes.find(g => normalizePath(g.path) === placedPath) : undefined)
 
       if (!lane) {
         lane = { ...placed, sessions: [] }

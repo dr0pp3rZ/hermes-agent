@@ -168,6 +168,81 @@ describe('mergeRepoWorktreeGroups (visual enhancer)', () => {
 
     expect(merged.map(g => g.label)).toContain('hermes/test-gui-stuff')
   })
+
+  it('relabels a dir-named linked worktree lane to its live checked-out branch', () => {
+    // Backend labels the lane by the worktree dir (`hermes-agent-ci`); the live
+    // `git worktree list` says HEAD there is `bb/ci-affected-only` → branch wins.
+    const repo = {
+      id: '/repo',
+      path: '/repo',
+      groups: [
+        lane({ id: '/repo::branch::main', label: 'main', isMain: true, path: '/repo', sessions: [makeSession('/repo')] }),
+        lane({
+          id: '/repo-ci',
+          label: 'hermes-agent-ci',
+          isMain: false,
+          path: '/repo-ci',
+          sessions: [makeSession('/repo-ci')]
+        })
+      ]
+    }
+
+    const discovered: HermesGitWorktree[] = [
+      { branch: 'main', detached: false, isMain: true, locked: false, path: '/repo' },
+      { branch: 'bb/ci-affected-only', detached: false, isMain: false, locked: false, path: '/repo-ci' }
+    ]
+
+    const merged = mergeRepoWorktreeGroups(repo, discovered)
+    const ci = merged.find(g => g.id === '/repo-ci')
+
+    expect(ci?.label).toBe('bb/ci-affected-only')
+    // The relabel is label-only — the lane keeps its id, path, and sessions.
+    expect(ci?.path).toBe('/repo-ci')
+    expect(ci?.sessions).toHaveLength(1)
+  })
+
+  it('keeps the dir label for a detached-HEAD worktree (no branch to show)', () => {
+    const repo = {
+      id: '/repo',
+      path: '/repo',
+      groups: [
+        lane({ id: '/repo-ci', label: 'repo-ci', isMain: false, path: '/repo-ci', sessions: [makeSession('/repo-ci')] })
+      ]
+    }
+
+    const discovered: HermesGitWorktree[] = [
+      { branch: null, detached: true, isMain: false, locked: false, path: '/repo-ci' }
+    ]
+
+    expect(mergeRepoWorktreeGroups(repo, discovered).find(g => g.id === '/repo-ci')?.label).toBe('repo-ci')
+  })
+
+  it('keeps the default-branch lane and also surfaces the live main-checkout branch', () => {
+    const repo = {
+      id: '/repo',
+      path: '/repo',
+      groups: [
+        lane({ id: '/repo::branch::main', label: 'main', isMain: true, path: '/repo', sessions: [makeSession('/repo')] })
+      ]
+    }
+
+    // The repo root is a worktree too. If it is currently switched away from
+    // main, keep the existing main sessions and inject the live branch as its
+    // own lane even though both lanes share the same physical path.
+    const discovered: HermesGitWorktree[] = [
+      { branch: 'some-feature', detached: false, isMain: true, locked: false, path: '/repo' }
+    ]
+
+    const merged = mergeRepoWorktreeGroups(repo, discovered)
+    const main = merged.find(g => g.label === 'main')
+    const live = merged.find(g => g.label === 'some-feature')
+
+    expect(main?.id).toBe('/repo::branch::main')
+    expect(main?.sessions).toHaveLength(1)
+    expect(live?.id).toBe('/repo::branch::some-feature')
+    expect(live?.path).toBe('/repo')
+    expect(live?.sessions).toHaveLength(0)
+  })
 })
 
 const makeProject = (id: string, folders: string[]): ProjectInfo => ({

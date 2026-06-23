@@ -40,6 +40,7 @@ import { searchSessions, type SessionInfo, type SessionSearchResult } from '@/he
 import { useI18n } from '@/i18n'
 import { comboTokens } from '@/lib/keybinds/combo'
 import { profileColor } from '@/lib/profile-color'
+import { flattenSessionsWithBranches } from '@/lib/session-branch-tree'
 import { sessionMatchesSearch } from '@/lib/session-search'
 import { normalizeSessionSource, sessionSourceLabel } from '@/lib/session-source'
 import { cn } from '@/lib/utils'
@@ -352,6 +353,7 @@ interface ChatSidebarProps extends React.ComponentProps<typeof Sidebar> {
   onResumeSession: (sessionId: string) => void
   onDeleteSession: (sessionId: string) => void
   onArchiveSession: (sessionId: string) => void
+  onBranchSession: (sessionId: string) => void
   onNewSessionInWorkspace: (path: null | string) => void
   onManageCronJob: (jobId: string) => void
   onTriggerCronJob: (jobId: string) => void
@@ -366,6 +368,7 @@ export function ChatSidebar({
   onResumeSession,
   onDeleteSession,
   onArchiveSession,
+  onBranchSession,
   onNewSessionInWorkspace,
   onManageCronJob,
   onTriggerCronJob
@@ -634,8 +637,11 @@ export function ChatSidebar({
   useEffect(() => {
     if (worktreeGroupingActive && gatewayReady) {
       void refreshProjects()
-      void refreshProjectTree()
-      void scanAndRecordRepos()
+      // Paint the list from the fast tree fetch (explicit projects + repos from
+      // existing sessions / the backend cache) FIRST, then kick off the heavy
+      // home-dir git crawl so newly-discovered repos fold in afterward — instead
+      // of the crawl blocking the first render.
+      void refreshProjectTree().finally(() => void scanAndRecordRepos())
     }
   }, [worktreeGroupingActive, profileScope, gatewayReady])
 
@@ -1243,6 +1249,7 @@ export function ChatSidebar({
                 label={s.results}
                 labelMeta={String(searchResults.length)}
                 onArchiveSession={onArchiveSession}
+                onBranchSession={onBranchSession}
                 onDeleteSession={onDeleteSession}
                 onResumeSession={onResumeSession}
                 onToggle={() => undefined}
@@ -1263,6 +1270,7 @@ export function ChatSidebar({
                 emptyState={<SidebarPinnedEmptyState />}
                 label={s.pinned}
                 onArchiveSession={onArchiveSession}
+                onBranchSession={onBranchSession}
                 onDeleteSession={onDeleteSession}
                 onReorderSessions={reorderPinned}
                 onResumeSession={onResumeSession}
@@ -1400,6 +1408,7 @@ export function ChatSidebar({
                 }
                 liveSessions={inProject ? agentSessions : undefined}
                 onArchiveSession={onArchiveSession}
+                onBranchSession={onBranchSession}
                 onDeleteSession={onDeleteSession}
                 onEnterProject={onEnterProject}
                 onNewSessionInWorkspace={showAllProfiles ? undefined : onNewSessionInWorkspace}
@@ -1589,6 +1598,7 @@ interface SidebarSessionsSectionProps {
   onResumeSession: (sessionId: string) => void
   onDeleteSession: (sessionId: string) => void
   onArchiveSession: (sessionId: string) => void
+  onBranchSession?: (sessionId: string, profile?: string) => void
   onTogglePin: (sessionId: string) => void
   onNewSessionInWorkspace?: (path: null | string) => void
   pinned: boolean
@@ -1646,6 +1656,7 @@ function SidebarSessionsSection({
   onResumeSession,
   onDeleteSession,
   onArchiveSession,
+  onBranchSession,
   onTogglePin,
   onNewSessionInWorkspace,
   pinned,
@@ -1688,20 +1699,24 @@ function SidebarSessionsSection({
   // The flat recents/pinned list is the only place sessions reorder by hand;
   // grouped/tree views always sort by creation date and never drag.
   const sessionsDraggable = sortable && !!onReorderSessions
+  const displayEntries = useMemo(() => flattenSessionsWithBranches(sessions), [sessions])
 
-  const renderRow = (session: SessionInfo, draggable: boolean) => {
+  const renderRow = (session: SessionInfo, draggable: boolean, branchStem?: string) => {
     const rowProps = {
+      branchStem,
       isPinned: pinned,
       isSelected: session.id === activeSessionId,
       isWorking: workingSessionIdSet.has(session.id),
       onArchive: () => onArchiveSession(session.id),
+      onBranch: onBranchSession ? () => onBranchSession(session.id, session.profile) : undefined,
       onDelete: () => onDeleteSession(session.id),
       onPin: () => onTogglePin(sessionPinId(session)),
       onResume: () => onResumeSession(session.id),
+      reorderable: draggable && !branchStem,
       session
     }
 
-    return draggable ? (
+    return draggable && !branchStem ? (
       <SortableSidebarSessionRow key={session.id} {...rowProps} />
     ) : (
       <SidebarSessionRow key={session.id} {...rowProps} />
@@ -1709,7 +1724,8 @@ function SidebarSessionsSection({
   }
 
   // Sessions inside repos/worktrees are date-ordered and static.
-  const renderRows = (items: SessionInfo[]) => items.map(session => renderRow(session, false))
+  const renderRows = (items: SessionInfo[]) =>
+    flattenSessionsWithBranches(items).map(({ branchStem, session }) => renderRow(session, false, branchStem))
 
   const flatVirtualized =
     !showEmptyState &&
@@ -1789,12 +1805,13 @@ function SidebarSessionsSection({
       <VirtualSessionList
         activeSessionId={activeSessionId}
         className={contentClassName}
+        entries={displayEntries}
         onArchiveSession={onArchiveSession}
+        onBranchSession={onBranchSession}
         onDeleteSession={onDeleteSession}
         onResumeSession={onResumeSession}
         onTogglePin={onTogglePin}
         pinned={pinned}
-        sessions={sessions}
         sortable={sessionsDraggable}
         workingSessionIdSet={workingSessionIdSet}
       />
@@ -1811,11 +1828,11 @@ function SidebarSessionsSection({
   } else if (sessionsDraggable && onReorderSessions) {
     inner = (
       <ReorderableList ids={sessions.map(s => s.id)} onReorder={onReorderSessions} sensors={dndSensors}>
-        {sessions.map(session => renderRow(session, true))}
+        {displayEntries.map(({ branchStem, session }) => renderRow(session, true, branchStem))}
       </ReorderableList>
     )
   } else {
-    inner = renderRows(sessions)
+    inner = displayEntries.map(({ branchStem, session }) => renderRow(session, false, branchStem))
   }
 
   // The virtualizer owns its own scroller, so suppress the wrapper's overflow
