@@ -98,6 +98,7 @@ import {
   openProjectCreate,
   refreshProjects,
   refreshProjectTree,
+  refreshWorktrees,
   scanAndRecordRepos
 } from '@/store/projects'
 import {
@@ -752,7 +753,40 @@ export function ChatSidebar({
   )
 
   // git worktree list is a VISUAL-only enhancer (empty lanes); never membership.
-  const [scopedRepoWorktrees] = useRepoWorktreeMap(scopedRepoPaths, Boolean(enteredProject && !showAllProfiles))
+  const inEnteredProject = Boolean(enteredProject && !showAllProfiles)
+  const [scopedRepoWorktrees] = useRepoWorktreeMap(scopedRepoPaths, inEnteredProject)
+
+  // Re-probe worktree lanes on out-of-band git changes the renderer can't see.
+  // A turn can `git worktree add/remove` in the terminal (e.g. you ask Hermes to
+  // "remove that worktree"), and the window never blurs during an in-app chat,
+  // so nothing would otherwise re-run the visual probe. Re-sync when a working
+  // session settles (its turn finished) or the window refocuses (an external
+  // terminal may have changed things) — only while a project is entered, and
+  // only the cheap per-repo `git worktree list`, never the heavy tree scan.
+  const prevWorkingIdsRef = useRef<string[]>(workingSessionIds)
+
+  useEffect(() => {
+    const prev = prevWorkingIdsRef.current
+    prevWorkingIdsRef.current = workingSessionIds
+
+    // A session leaving the working set means its turn just completed.
+    const aTurnSettled = prev.some(id => !workingSessionIds.includes(id))
+
+    if (inEnteredProject && aTurnSettled) {
+      refreshWorktrees()
+    }
+  }, [workingSessionIds, inEnteredProject])
+
+  useEffect(() => {
+    if (!inEnteredProject) {
+      return
+    }
+
+    const onFocus = () => refreshWorktrees()
+    window.addEventListener('focus', onFocus)
+
+    return () => window.removeEventListener('focus', onFocus)
+  }, [inEnteredProject])
 
   const lastProjectCwdSyncRef = useRef<null | string>(null)
 

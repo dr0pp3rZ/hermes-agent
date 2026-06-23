@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { $projectScope, ALL_PROJECTS, enterProject, exitProjectScope } from './projects'
+import {
+  $projectScope,
+  $worktreeRefreshToken,
+  ALL_PROJECTS,
+  enterProject,
+  exitProjectScope,
+  refreshWorktrees
+} from './projects'
 
 describe('project scope', () => {
   beforeEach(() => {
@@ -33,5 +40,13 @@ describe('project scope', () => {
   it('persists the scope to localStorage', () => {
     enterProject('p_abc')
     expect(window.localStorage.getItem('hermes.desktop.projectScope')).toBe('p_abc')
+  })
+})
+
+describe('worktree refresh', () => {
+  it('refreshWorktrees bumps the probe token so useRepoWorktreeMap refetches', () => {
+    const before = $worktreeRefreshToken.get()
+    refreshWorktrees()
+    expect($worktreeRefreshToken.get()).toBe(before + 1)
   })
 })

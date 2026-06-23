@@ -483,6 +483,17 @@ export function closeProjectDialog(): void {
 export const $worktreeRefreshToken = atom(0)
 const bumpWorktrees = () => $worktreeRefreshToken.set($worktreeRefreshToken.get() + 1)
 
+// Re-run the visual `git worktree list` probe without the heavy projects.tree
+// scan. Desktop-initiated add/remove already bumps the token inline; this is for
+// OUT-OF-BAND changes the renderer can't see: the agent runs `git worktree
+// add/remove` in the terminal during a turn, or an external terminal mutates the
+// repo while the window was away. The probe is per-repo and bounded, so the
+// caller (a settled turn / window refocus) can re-sync the worktree lanes
+// cheaply, the same way a git GUI refreshes its tree on focus.
+export function refreshWorktrees(): void {
+  bumpWorktrees()
+}
+
 // Spin up a fresh worktree the lightest way (`git worktree add -b`) under the
 // repo, returning where Hermes should start working. Git is the source of
 // truth; the caller starts a session in the returned path.
