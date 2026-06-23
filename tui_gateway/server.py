@@ -5580,6 +5580,91 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"ok": True, "logged_in": False, "error": "could not load billing state"})
 
 
+def _serialize_subscription_state(state) -> dict:
+    """Serialize a SubscriptionState for the wire (Decimals → strings)."""
+    from agent.billing_view import format_money
+
+    def _s(value):
+        return None if value is None else str(value)
+
+    current = None
+    if state.current is not None:
+        c = state.current
+        current = {
+            "tier_id": c.tier_id,
+            "tier_name": c.tier_name,
+            "monthly_credits": _s(c.monthly_credits),
+            "credits_remaining": _s(c.credits_remaining),
+            "cycle_ends_at": c.cycle_ends_at,
+            "pending_downgrade_tier_name": c.pending_downgrade_tier_name,
+            "pending_downgrade_at": c.pending_downgrade_at,
+            "is_past_due": c.is_past_due,
+        }
+    tiers = []
+    for t in state.tiers:
+        tiers.append({
+            "tier_id": t.tier_id,
+            "name": t.name,
+            "tier_order": t.tier_order,
+            "dollars_per_month_display": format_money(t.dollars_per_month),
+            "monthly_credits": _s(t.monthly_credits),
+            "is_current": t.is_current,
+            "is_enabled": t.is_enabled,
+        })
+    return {
+        "ok": True,
+        "logged_in": state.logged_in,
+        "is_admin": state.is_admin,
+        "can_change_plan": state.can_change_plan,
+        "org_name": state.org_name,
+        "role": state.role,
+        "current": current,
+        "tiers": tiers,
+        "portal_url": state.portal_url,
+        "error": state.error,
+    }
+
+
+@method("subscription.state")
+def _(rid, params: dict) -> dict:
+    """GET /api/billing/subscription → serialized SubscriptionState.
+
+    Fail-open like billing.state: logged-out / unreachable portal →
+    {ok:true, logged_in:false}. No scope required (read-only).
+    """
+    try:
+        from agent.subscription_view import build_subscription_state
+
+        state = build_subscription_state()
+        return _ok(rid, _serialize_subscription_state(state))
+    except Exception:
+        return _ok(rid, {"ok": True, "logged_in": False, "error": "could not load subscription state"})
+
+
+@method("subscription.manage_link")
+def _(rid, params: dict) -> dict:
+    """POST /api/billing/subscription/manage-link → {ok, kind, url} or typed error.
+
+    kind: 'checkout' (free → first subscribe) | 'portal' (existing sub →
+    NAS manage page). The deep-link target is NAS's own /manage-subscription
+    page, NOT the Stripe hosted Billing Portal. The TUI just opens the URL.
+    Raises insufficient_scope when Remote-Spending is required (Phase 4).
+    """
+    from hermes_cli.nous_billing import BillingError
+
+    try:
+        from agent.subscription_view import get_subscription_manage_link
+
+        result = get_subscription_manage_link(
+            target_tier_id=params.get("target_tier_id") or None
+        )
+        return _ok(rid, {"ok": True, "kind": result.get("kind"), "url": result.get("url")})
+    except BillingError as exc:
+        return _ok(rid, _serialize_billing_error(exc))
+    except Exception as exc:
+        return _ok(rid, {"ok": False, "error": "error", "message": str(exc)})
+
+
 @method("billing.charge")
 def _(rid, params: dict) -> dict:
     """POST /api/billing/charge → {ok, chargeId} or a typed error envelope.

@@ -404,3 +404,32 @@ def get_charge_status(
     # guard against a stray slash that would change the path shape.
     safe_id = urllib.parse.quote(charge_id.strip(), safe="")
     return _request("GET", f"/api/billing/charge/{safe_id}", timeout=timeout)
+
+
+def get_subscription_state(*, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
+    """``GET /api/billing/subscription`` — current plan, tiers, usage (no scope).
+
+    Returns the raw JSON dict from NAS (WS1 Phase A). Read-only — no
+    ``billing:manage`` scope required. Raises :class:`BillingAuthError`
+    on 401 and :class:`BillingError` on other non-2xx.
+    """
+    return _request("GET", "/api/billing/subscription", timeout=timeout)
+
+
+def post_subscription_manage_link(
+    *,
+    target_tier_id: Optional[str] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """``POST /api/billing/subscription/manage-link`` → ``{kind, url}`` (scope required).
+
+    Returns a Stripe-hosted URL the TUI opens via ``openExternalUrl``.
+    ``kind`` is ``"checkout"`` (free → first subscribe) or ``"portal"``
+    (existing sub → NAS manage page). ``target_tier_id`` is needed only
+    for the free→paid checkout branch. Raises :class:`BillingScopeRequired`
+    when the Remote-Spending grant is missing (Phase 4 step-up trigger).
+    """
+    body: dict[str, Any] = {}
+    if target_tier_id:
+        body["targetTierId"] = target_tier_id
+    return _request("POST", "/api/billing/subscription/manage-link", body=body, timeout=timeout)
